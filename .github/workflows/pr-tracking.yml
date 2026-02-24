@@ -18,6 +18,7 @@ env:
   PROD_BRANCH: 'prod'
   ISSUE_TITLE: 'Open PRs for Prod'
   MAIN_PR_LIMIT: 150
+  PROD_PR_LIMIT: 150
 
 jobs:
   update-preprod-pr-issue:
@@ -49,33 +50,9 @@ jobs:
             const prodBranch = '${{ steps.set_branch.outputs.branch }}';
             const issueTitle = process.env.ISSUE_TITLE || 'Open PRs for Prod';
             const mainPrLimit = parseInt(process.env.MAIN_PR_LIMIT || '150', 10);
+            const prodPrLimit = parseInt(process.env.PROD_PR_LIMIT || '150', 10);
             const { owner, repo } = context.repo;
 
-            // 1) Fetch all merged PRs to main (paginated)
-            const mergedToMain = [];
-            let page = 1;
-            const perPage = 100;
-            while (true) {
-              const { data } = await github.rest.pulls.list({
-                owner,
-                repo,
-                state: 'closed',
-                base: 'main',
-                sort: 'updated',
-                direction: 'desc',
-                per_page: perPage,
-                page
-              });
-              const merged = data.filter(pr => pr.merged_at != null);
-              mergedToMain.push(...merged);
-              if (merged.length < perPage || mergedToMain.length >= mainPrLimit) break;
-              page++;
-            }
-            const mainPrs = mergedToMain
-              .sort((a, b) => new Date(b.merged_at) - new Date(a.merged_at))
-              .slice(0, mainPrLimit);
-
-            // 2) Build single table: PR | Author | Merged to Main | Short Commit (sorted by date, newest first)
             function formatDDMMYYYY(isoDate) {
               if (!isoDate) return '-';
               const d = new Date(isoDate);
@@ -84,20 +61,62 @@ jobs:
               const year = d.getFullYear();
               return `${day}-${month}-${year}`;
             }
-            let table = '| PR | Author | Merged to Main | Short Commit |\n|----|--------|----------------|---------------|\n';
-            for (const pr of mainPrs) {
-              const author = (pr.user && (pr.user.name || pr.user.login)) || '-';
-              const mergedAt = formatDDMMYYYY(pr.merged_at);
-              const shortCommit = (pr.merge_commit_sha || '').slice(0, 7) || '-';
-              const prLink = `[PR-${pr.number}](${pr.html_url})`;
-              const authorEscaped = author.replace(/\|/g, '\\|');
-              table += `| ${prLink} | ${authorEscaped} | ${mergedAt} | ${shortCommit} |\n`;
+            function fetchMergedPrs(baseBranch, limit) {
+              const merged = [];
+              let page = 1;
+              const perPage = 100;
+              return (async () => {
+                while (true) {
+                  const { data } = await github.rest.pulls.list({
+                    owner,
+                    repo,
+                    state: 'closed',
+                    base: baseBranch,
+                    sort: 'updated',
+                    direction: 'desc',
+                    per_page: perPage,
+                    page
+                  });
+                  const mergedPage = data.filter(pr => pr.merged_at != null);
+                  merged.push(...mergedPage);
+                  if (mergedPage.length < perPage || merged.length >= limit) break;
+                  page++;
+                }
+                return merged
+                  .sort((a, b) => new Date(b.merged_at) - new Date(a.merged_at))
+                  .slice(0, limit);
+              })();
             }
+            function buildTable(prs, mergedToLabel) {
+              let table = `| PR | Author | ${mergedToLabel} | Short Commit |\n|----|--------|----------------|---------------|\n`;
+              for (const pr of prs) {
+                const author = (pr.user && (pr.user.name || pr.user.login)) || '-';
+                const mergedAt = formatDDMMYYYY(pr.merged_at);
+                const shortCommit = (pr.merge_commit_sha || '').slice(0, 7) || '-';
+                const prLink = `[PR-${pr.number}](${pr.html_url})`;
+                const authorEscaped = author.replace(/\|/g, '\\|');
+                table += `| ${prLink} | ${authorEscaped} | ${mergedAt} | ${shortCommit} |\n`;
+              }
+              return table;
+            }
+
+            // 1) Fetch merged PRs to main and prod
+            const [mainPrs, prodPrs] = await Promise.all([
+              fetchMergedPrs('main', mainPrLimit),
+              fetchMergedPrs(prodBranch, prodPrLimit)
+            ]);
+
+            const mainTable = buildTable(mainPrs, 'Merged to Main');
+            const prodTable = buildTable(prodPrs, 'Merged to Prod');
 
             const body = [
               '## PRs merged to main',
               '',
-              table,
+              mainTable,
+              '',
+              '## PRs merged to prod',
+              '',
+              prodTable,
               '',
               `_Last updated by [Prod PR Tracking](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}) workflow._`
             ].join('\n');
@@ -139,3 +158,4 @@ jobs:
         env:
           ISSUE_TITLE: 'Open PRs for Prod'
           MAIN_PR_LIMIT: '150'
+          PROD_PR_LIMIT: '150'
