@@ -47,31 +47,12 @@ jobs:
       - name: Get merged PR numbers in prod
         run: |
           if git rev-parse origin/${{ steps.set_branch.outputs.branch }} >/dev/null 2>&1; then
-            python - <<'PY'
-            import re
-            import subprocess
-            import os
-
-            branch = os.environ["PROD_BRANCH_NAME"]
-            proc = subprocess.run(
-                ["git", "log", f"origin/{branch}", "--pretty=%B"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            text = proc.stdout if proc.returncode == 0 else ""
-
-            # Capture PR numbers from common GitHub merge/squash patterns like "(#123)"
-            pr_nums = sorted(set(re.findall(r"\(#(\d+)\)", text)), key=lambda x: int(x))
-
-            with open("prod_pr_numbers.txt", "w", encoding="utf-8") as f:
-                f.write("\n".join(pr_nums))
-            PY
+            git log origin/${{ steps.set_branch.outputs.branch }} --pretty=%B \
+              | rg -o '\(#([0-9]+)\)' --replace '$1' \
+              | sort -n -u > prod_pr_numbers.txt || true
           else
-            echo '' > prod_pr_numbers.txt
+            : > prod_pr_numbers.txt
           fi
-        env:
-          PROD_BRANCH_NAME: ${{ steps.set_branch.outputs.branch }}
 
       - name: Fetch merged PRs to main and prod PR refs, then update issue
         uses: actions/github-script@v7
