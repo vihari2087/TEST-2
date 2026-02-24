@@ -1,0 +1,141 @@
+# Updates the "Open PRs for Prod" GitHub issue with a single table:
+# PR | Author | Merged to Main | Short Commit (sorted by date)
+name: Prod PR Tracking
+
+on:
+  push:
+    branches:
+      - main
+      - prod
+  workflow_dispatch:
+    inputs:
+      prod_branch:
+        description: 'Prod branch to scan for main PR references'
+        required: false
+        default: 'prod'
+
+env:
+  PROD_BRANCH: 'prod'
+  ISSUE_TITLE: 'Open PRs for Prod'
+  MAIN_PR_LIMIT: 150
+
+jobs:
+  update-preprod-pr-issue:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set prod branch
+        id: set_branch
+        run: |
+          if [[ -n "${{ github.event.inputs.prod_branch }}" ]]; then
+            echo "branch=${{ github.event.inputs.prod_branch }}" >> $GITHUB_OUTPUT
+          else
+            echo "branch=${{ env.PROD_BRANCH }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fetch merged PRs to main and prod PR refs, then update issue
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prodBranch = '${{ steps.set_branch.outputs.branch }}';
+            const issueTitle = process.env.ISSUE_TITLE || 'Open PRs for Prod';
+            const mainPrLimit = parseInt(process.env.MAIN_PR_LIMIT || '150', 10);
+            const { owner, repo } = context.repo;
+
+            // 1) Fetch all merged PRs to main (paginated)
+            const mergedToMain = [];
+            let page = 1;
+            const perPage = 100;
+            while (true) {
+              const { data } = await github.rest.pulls.list({
+                owner,
+                repo,
+                state: 'closed',
+                base: 'main',
+                sort: 'updated',
+                direction: 'desc',
+                per_page: perPage,
+                page
+              });
+              const merged = data.filter(pr => pr.merged_at != null);
+              mergedToMain.push(...merged);
+              if (merged.length < perPage || mergedToMain.length >= mainPrLimit) break;
+              page++;
+            }
+            const mainPrs = mergedToMain
+              .sort((a, b) => new Date(b.merged_at) - new Date(a.merged_at))
+              .slice(0, mainPrLimit);
+
+            // 2) Build single table: PR | Author | Merged to Main | Short Commit (sorted by date, newest first)
+            function formatDDMMYYYY(isoDate) {
+              if (!isoDate) return '-';
+              const d = new Date(isoDate);
+              const day = String(d.getDate()).padStart(2, '0');
+              const month = String(d.getMonth() + 1).padStart(2, '0');
+              const year = d.getFullYear();
+              return `${day}-${month}-${year}`;
+            }
+            let table = '| PR | Author | Merged to Main | Short Commit |\n|----|--------|----------------|---------------|\n';
+            for (const pr of mainPrs) {
+              const author = (pr.user && (pr.user.name || pr.user.login)) || '-';
+              const mergedAt = formatDDMMYYYY(pr.merged_at);
+              const shortCommit = (pr.merge_commit_sha || '').slice(0, 7) || '-';
+              const prLink = `[PR-${pr.number}](${pr.html_url})`;
+              const authorEscaped = author.replace(/\|/g, '\\|');
+              table += `| ${prLink} | ${authorEscaped} | ${mergedAt} | ${shortCommit} |\n`;
+            }
+
+            const body = [
+              '## PRs merged to main',
+              '',
+              table,
+              '',
+              `_Last updated by [Prod PR Tracking](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}) workflow._`
+            ].join('\n');
+
+            // 5) Find or create the issue
+            const { data: search } = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} "${issueTitle}" is:issue`
+            });
+            const existing = search.items.length ? search.items[0] : null;
+            let issueNumber = existing ? existing.number : null;
+
+            if (issueNumber) {
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body
+              });
+              if (existing && existing.state === 'closed') {
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  state: 'open'
+                });
+              }
+              console.log('Updated issue #' + issueNumber);
+            } else {
+              const { data: created } = await github.rest.issues.create({
+                owner,
+                repo,
+                title: issueTitle,
+                body
+              });
+              issueNumber = created.number;
+              console.log('Created issue #' + issueNumber);
+            }
+            return { issue_number: issueNumber };
+        env:
+          ISSUE_TITLE: 'Open PRs for Prod'
+          MAIN_PR_LIMIT: '150'
