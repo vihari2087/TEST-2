@@ -48,8 +48,8 @@ jobs:
         run: |
           if git rev-parse origin/${{ steps.set_branch.outputs.branch }} >/dev/null 2>&1; then
             git log origin/${{ steps.set_branch.outputs.branch }} --pretty=%B \
-              | rg -o '\(#([0-9]+)\)' --replace '$1' \
-              | sort -n -u > prod_pr_numbers.txt || true
+              | sed -nE "s/.*\(#([0-9]+)\).*/\1/p; s/.*[Pp]ull request #([0-9]+).*/\1/p" \
+              | sort -n -u > prod_pr_numbers.txt
           else
             : > prod_pr_numbers.txt
           fi
@@ -73,6 +73,7 @@ jobs:
               ? fs.readFileSync(prodPrNumbersPath, 'utf8')
               : '';
             const prodPrNumberSet = new Set(prodPrNumbersRaw.trim().split(/\s+/).filter(Boolean));
+            console.log(`Found ${prodPrNumberSet.size} PR numbers on prod`);
 
             function formatDDMMYYYY(isoDate) {
               if (!isoDate) return '-';
@@ -124,6 +125,7 @@ jobs:
             // Fetch PRs merged to main, then exclude PRs already present on prod by PR number
             const mainPrs = await fetchMergedPrs('main', mainPrLimit);
             const mainPrsNotInProd = mainPrs.filter(pr => !prodPrNumberSet.has(String(pr.number)));
+            console.log(`Main merged PRs: ${mainPrs.length}, remaining not in prod: ${mainPrsNotInProd.length}`);
 
             const table = buildTable(mainPrsNotInProd, 'Merged to Main');
 
