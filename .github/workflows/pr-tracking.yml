@@ -18,7 +18,6 @@ env:
   PROD_BRANCH: 'prod'
   ISSUE_TITLE: 'Open PRs for Prod'
   MAIN_PR_LIMIT: 150
-  PROD_PR_LIMIT: 150
 
 jobs:
   update-preprod-pr-issue:
@@ -60,7 +59,6 @@ jobs:
           script: |
             const issueTitle = process.env.ISSUE_TITLE || 'Open PRs for Prod';
             const mainPrLimit = parseInt(process.env.MAIN_PR_LIMIT || '150', 10);
-            const prodPrLimit = parseInt(process.env.PROD_PR_LIMIT || '150', 10);
             const { owner, repo } = context.repo;
             const fs = require('fs');
             const path = require('path');
@@ -128,11 +126,7 @@ jobs:
             const body = [
               '## PRs merged to main (not yet in prod)',
               '',
-              mainTable,
-              '',
-              '## PRs merged to prod',
-              '',
-              prodTable,
+              table,
               '',
               `_Last updated by [Prod PR Tracking](${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}) workflow._`
             ].join('\n');
@@ -174,4 +168,3 @@ jobs:
         env:
           ISSUE_TITLE: 'Open PRs for Prod'
           MAIN_PR_LIMIT: '150'
-          PROD_PR_LIMIT: '150'
