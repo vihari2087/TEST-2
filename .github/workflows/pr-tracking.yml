@@ -44,34 +44,13 @@ jobs:
       - name: Fetch prod branch
         run: git fetch origin ${{ steps.set_branch.outputs.branch }} || true
 
-      - name: Get merged PR numbers in prod
+      - name: Get commits in prod
         run: |
           if git rev-parse origin/${{ steps.set_branch.outputs.branch }} >/dev/null 2>&1; then
-            python - <<'PY'
-            import re
-            import subprocess
-            import os
-
-            branch = os.environ["PROD_BRANCH_NAME"]
-            proc = subprocess.run(
-                ["git", "log", f"origin/{branch}", "--pretty=%B"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            text = proc.stdout if proc.returncode == 0 else ""
-
-            # Capture PR numbers from common GitHub merge/squash patterns like "(#123)"
-            pr_nums = sorted(set(re.findall(r"\(#(\d+)\)", text)), key=lambda x: int(x))
-
-            with open("prod_pr_numbers.txt", "w", encoding="utf-8") as f:
-                f.write("\n".join(pr_nums))
-            PY
+            git rev-list origin/${{ steps.set_branch.outputs.branch }} > prod_commits.txt
           else
-            echo '' > prod_pr_numbers.txt
+            echo '' > prod_commits.txt
           fi
-        env:
-          PROD_BRANCH_NAME: ${{ steps.set_branch.outputs.branch }}
 
       - name: Fetch merged PRs to main and prod PR refs, then update issue
         uses: actions/github-script@v7
@@ -84,12 +63,12 @@ jobs:
             const fs = require('fs');
             const path = require('path');
 
-            // PR numbers already present on prod (from previous step)
-            const prodPrNumbersPath = path.join(process.env.GITHUB_WORKSPACE, 'prod_pr_numbers.txt');
-            const prodPrNumbersRaw = fs.existsSync(prodPrNumbersPath)
-              ? fs.readFileSync(prodPrNumbersPath, 'utf8')
+            // Commits that are already on prod (from previous step)
+            const prodCommitsPath = path.join(process.env.GITHUB_WORKSPACE, 'prod_commits.txt');
+            const prodCommitsRaw = fs.existsSync(prodCommitsPath)
+              ? fs.readFileSync(prodCommitsPath, 'utf8')
               : '';
-            const prodPrNumberSet = new Set(prodPrNumbersRaw.trim().split(/\s+/).filter(Boolean));
+            const prodCommitSet = new Set(prodCommitsRaw.trim().split(/\s+/).filter(Boolean));
 
             function formatDDMMYYYY(isoDate) {
               if (!isoDate) return '-';
@@ -138,9 +117,9 @@ jobs:
               return table;
             }
 
-            // Fetch PRs merged to main, then exclude PRs already present on prod by PR number
+            // Fetch PRs merged to main, then exclude those whose merge commit is already on prod
             const mainPrs = await fetchMergedPrs('main', mainPrLimit);
-            const mainPrsNotInProd = mainPrs.filter(pr => !prodPrNumberSet.has(String(pr.number)));
+            const mainPrsNotInProd = mainPrs.filter(pr => !prodCommitSet.has(pr.merge_commit_sha));
 
             const table = buildTable(mainPrsNotInProd, 'Merged to Main');
 
