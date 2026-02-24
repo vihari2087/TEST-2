@@ -41,8 +41,16 @@ jobs:
             echo "branch=${{ env.PROD_BRANCH }}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Fetch prod branch
+        run: git fetch origin ${{ steps.set_branch.outputs.branch }} || true
+
       - name: Get commits in prod
-        run: git rev-list origin/${{ steps.set_branch.outputs.branch }} > prod_commits.txt
+        run: |
+          if git rev-parse origin/${{ steps.set_branch.outputs.branch }} >/dev/null 2>&1; then
+            git rev-list origin/${{ steps.set_branch.outputs.branch }} > prod_commits.txt
+          else
+            echo '' > prod_commits.txt
+          fi
 
       - name: Fetch merged PRs to main and prod PR refs, then update issue
         uses: actions/github-script@v7
@@ -56,7 +64,10 @@ jobs:
             const path = require('path');
 
             // Commits that are already on prod (from previous step)
-            const prodCommitsRaw = fs.readFileSync(path.join(process.env.GITHUB_WORKSPACE, 'prod_commits.txt'), 'utf8');
+            const prodCommitsPath = path.join(process.env.GITHUB_WORKSPACE, 'prod_commits.txt');
+            const prodCommitsRaw = fs.existsSync(prodCommitsPath)
+              ? fs.readFileSync(prodCommitsPath, 'utf8')
+              : '';
             const prodCommitSet = new Set(prodCommitsRaw.trim().split(/\s+/).filter(Boolean));
 
             function formatDDMMYYYY(isoDate) {
