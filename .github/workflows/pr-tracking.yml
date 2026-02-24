@@ -44,13 +44,17 @@ jobs:
       - name: Fetch prod branch
         run: git fetch origin ${{ steps.set_branch.outputs.branch }} || true
 
-      - name: Get commits in prod
+      - name: Get merged PR numbers in prod
         run: |
           if git rev-parse origin/${{ steps.set_branch.outputs.branch }} >/dev/null 2>&1; then
-            git rev-list origin/${{ steps.set_branch.outputs.branch }} > prod_commits.txt
+            git log origin/${{ steps.set_branch.outputs.branch }} --pretty=%B \
+              | sed -nE "s/.*\(#([0-9]+)\).*/\1/p; s/.*[Pp]ull request #([0-9]+).*/\1/p" \
+              | sort -n -u > prod_pr_numbers.txt
           else
-            echo '' > prod_commits.txt
+            : > prod_pr_numbers.txt
           fi
+        env:
+          PROD_BRANCH_NAME: ${{ steps.set_branch.outputs.branch }}
 
       - name: Fetch merged PRs to main and prod PR refs, then update issue
         uses: actions/github-script@v7
@@ -63,12 +67,13 @@ jobs:
             const fs = require('fs');
             const path = require('path');
 
-            // Commits that are already on prod (from previous step)
-            const prodCommitsPath = path.join(process.env.GITHUB_WORKSPACE, 'prod_commits.txt');
-            const prodCommitsRaw = fs.existsSync(prodCommitsPath)
-              ? fs.readFileSync(prodCommitsPath, 'utf8')
+            // PR numbers already present on prod (from previous step)
+            const prodPrNumbersPath = path.join(process.env.GITHUB_WORKSPACE, 'prod_pr_numbers.txt');
+            const prodPrNumbersRaw = fs.existsSync(prodPrNumbersPath)
+              ? fs.readFileSync(prodPrNumbersPath, 'utf8')
               : '';
-            const prodCommitSet = new Set(prodCommitsRaw.trim().split(/\s+/).filter(Boolean));
+            const prodPrNumberSet = new Set(prodPrNumbersRaw.trim().split(/\s+/).filter(Boolean));
+            console.log(`Found ${prodPrNumberSet.size} PR numbers on prod`);
 
             function formatDDMMYYYY(isoDate) {
               if (!isoDate) return '-';
@@ -117,9 +122,10 @@ jobs:
               return table;
             }
 
-            // Fetch PRs merged to main, then exclude those whose merge commit is already on prod
+            // Fetch PRs merged to main, then exclude PRs already present on prod by PR number
             const mainPrs = await fetchMergedPrs('main', mainPrLimit);
-            const mainPrsNotInProd = mainPrs.filter(pr => !prodCommitSet.has(pr.merge_commit_sha));
+            const mainPrsNotInProd = mainPrs.filter(pr => !prodPrNumberSet.has(String(pr.number)));
+            console.log(`Main merged PRs: ${mainPrs.length}, remaining not in prod: ${mainPrsNotInProd.length}`);
 
             const table = buildTable(mainPrsNotInProd, 'Merged to Main');
 
